@@ -15,7 +15,7 @@ std::string read_file(std::string const& path)
 
     in.open(path);
     if (in.fail())
-        throw std::runtime_error("не удалось открыть файл");
+        throw std::runtime_error("не удалось открыть файл " + path);
 
     for(;;)
     {

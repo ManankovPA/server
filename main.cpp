@@ -188,13 +188,19 @@ tcp::socket server::accept(tcp::endpoint& endpoint)
 
 int main()
 {
-    signal_set set = {SIGINT, SIGTERM, SIGHUP};
-    block_signals block(set);
+    try
+    {
+        signal_set set = {SIGINT, SIGTERM, SIGHUP};
+        block_signals block(set);
+        boost::asio::io_context ctx;
+        server server(ctx, tcp::endpoint (tcp::v4(), 1025));
+        int sig_num = set.wait();
+        std::cerr << "Завершаемся с сигналом " << sig_num << std::endl;
+    }
+    catch (std::exception const& e)
+    {
+        std::cout << e.what() << std::endl;
+    }
 
-    boost::asio::io_context ctx;
-    server server(ctx, tcp::endpoint (tcp::v4(), 1025));
 
-    int sig_num = set.wait();
-
-    std::cerr << "Завершаемся с сигналом " << sig_num << std::endl;
 }
