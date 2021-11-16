@@ -12,4 +12,6 @@ SOURCES += \
 
 HEADERS += \
     cpp_signals.h \
-    server_certificate.h
+    server_certificate.h \
+    suppress_cancellation.h \
+    worker_thread_manager.h

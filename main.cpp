@@ -7,10 +7,8 @@
 #include <string>
 #include "cpp_signals.h"
 #include "server_certificate.h"
-
+#include "worker_thread_manager.h"
 using namespace boost::asio::ip;
-
-struct accepting_thread_guard;
 
 struct server
 {
@@ -20,87 +18,27 @@ struct server
     server(boost::asio::io_context& ctx, tcp::endpoint endpoint)
         :acceptor(ctx, endpoint)
         ,connection_count(0)
-        ,now_accepting_threads(0)
         ,ssl_ctx(boost::asio::ssl::context::tlsv12)
+        ,manager(5, [this]{thread_proc(); })
     {
         load_server_certificate(ssl_ctx);
-        add_thread();
+        manager.start();
     }
 
     void thread_proc();
-
-    void add_thread()
-    {
-        v.emplace_back ([this] { thread_proc(); });
-    }
 
     tcp::socket accept(tcp::endpoint& endpoint);
 
     response_t generate_response(request_t const & req);
     response_t generate_bad_request_response(request_t const& req, std::string const& str);
 
-    ~server()
-    {
-        for(size_t i = 0; i != v.size(); ++i)
-        {
-            int a = pthread_cancel(v[i].native_handle());
-            if(a != 0)
-                std::abort();
-        }
-
-
-        for(size_t i = 0; i != v.size(); ++i)
-            v[i].join();
-    }
-
 private:
 
     tcp::acceptor acceptor;
     std::atomic<size_t> connection_count;
-    std::vector<std::thread> v;
-    std::atomic<size_t> now_accepting_threads;
     boost::asio::ssl::context ssl_ctx;
-
+    worker_thread_manager manager;
     friend struct accepting_thread_guard;
-};
-
-struct accepting_thread_guard
-{
-    struct too_many_accepting_threads : std::exception
-    {
-        using exception::exception;
-    };
-
-    accepting_thread_guard(server& s)
-        : s(s)
-    {
-        size_t old = s.now_accepting_threads;
-
-        do
-        {
-            if(old == 5)
-                throw too_many_accepting_threads();
-        }
-        while(!s.now_accepting_threads.compare_exchange_weak(old, old + 1));
-    }
-
-    ~accepting_thread_guard()
-    {
-        if(--s.now_accepting_threads == 0)
-        {
-            try
-            {
-                s.add_thread();
-            }
-            catch (std::exception const& e)
-            {
-                std::cerr << "Ошибка при создании потока " << e.what() << std::endl;
-            }
-        }
-    }
-private:
-    server& s;
-
 };
 
 server::response_t server::generate_response(request_t const& req)
@@ -133,56 +71,44 @@ server::response_t server::generate_bad_request_response(request_t const& req, s
 
 void server::thread_proc()
 {
-
-    int old_state;
-    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &old_state);
-
-    std::cout << old_state << std::endl;
-
-    try
+    for(;;)
     {
-        for(;;)
+        try
         {
-            try
+            tcp::endpoint endpoint;
+            tcp::socket s = accept(endpoint);
+            boost::beast::ssl_stream<tcp::socket&> stream{s, ssl_ctx};
+            stream.handshake(boost::asio::ssl:: stream_base::server);
+            std::cout << "Принято новое подключение №" << ++connection_count << " от "
+                      << endpoint << '\n';
+
+            boost::beast::flat_buffer buffer;
+
+            for(;;)
             {
-                tcp::endpoint endpoint;
-                tcp::socket s = accept(endpoint);
-                boost::beast::ssl_stream<tcp::socket&> stream{s, ssl_ctx};
-                stream.handshake(boost::asio::ssl:: stream_base::server);
-                std::cout << "Принято новое подключение №" << ++connection_count << " от "
-                          << endpoint << '\n';
+                request_t req;
+                boost::beast::http::read(stream, buffer, req);
+                std::cout << req << '\n';
 
-                boost::beast::flat_buffer buffer;
+                auto res = generate_response(req);
 
-                for(;;)
-                {
-                    request_t req;
-                    boost::beast::http::read(stream, buffer, req);
-                    std::cout << req << '\n';
+                boost::beast::http::write(stream, res);
 
-                    auto res = generate_response(req);
-
-                    boost::beast::http::write(stream, res);
-
-                    if(!res.keep_alive())
-                        break;
-                }
-                stream.shutdown();
+                if(!res.keep_alive())
+                    break;
             }
-            catch (boost::system::system_error const& e)
-            {
-                std::cerr << "Поймано исключение " << e.what() << std::endl;
-            }
+            stream.shutdown();
         }
-
+        catch (boost::system::system_error const& e)
+        {
+            std::cerr << "Поймано исключение " << e.what() << std::endl;
+        }
     }
-    catch (accepting_thread_guard::too_many_accepting_threads const& ) { }
-
 }
 
 tcp::socket server::accept(tcp::endpoint& endpoint)
 {
-    accepting_thread_guard guard(*this);
+    worker_thread_manager::accepting_thread_guard guard(manager);
     return acceptor.accept(endpoint);
 }
 
