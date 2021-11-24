@@ -7,6 +7,10 @@
 #include <memory>
 #include <fstream>
 #include <iostream>
+#include <sys/types.h>
+#include <pwd.h>
+#include <string>
+#include <sstream>
 
 std::string read_file(std::string const& path)
 {
@@ -33,34 +37,26 @@ std::string read_file(std::string const& path)
     return s_out;
 }
 
-inline void load_server_certificate(boost::asio::ssl::context& ctx)
+
+void change_user(std::string const& user_name)
 {
-    std::string const cert = read_file("cert.pem");
-    std::string const key = read_file("key.pem");
-    std::string const dh = read_file("dh.pem");
-/*
-    ctx.set_password_callback(
-          [](std::size_t,
-              boost::asio::ssl::context_base::password_purpose)
-          {
-              return "test";
-          });
-*/
-    ctx.set_options(
-      boost::asio::ssl::context::default_workarounds |
-      boost::asio::ssl::context::no_sslv2 |
-      boost::asio::ssl::context::single_dh_use);
+    passwd* pw = getpwnam(user_name.c_str());
+    if (pw == nullptr)
+        throw std::runtime_error ("Не найден пользователь " + user_name);
 
-    ctx.use_certificate_chain(
-      boost::asio::buffer(cert.data(), cert.size()));
+    if (setgid(pw->pw_gid) != 0)
+    {
+        std::stringstream ss;
+        ss << "Не удалось изменить группу на " << pw->pw_gid;
+        throw std::runtime_error (ss.str());
+    }
 
-    ctx.use_private_key(
-      boost::asio::buffer(key.data(), key.size()),
-      boost::asio::ssl::context::file_format::pem);
-
-    ctx.use_tmp_dh(
-      boost::asio::buffer(dh.data(), dh.size()));
-
+    if (setuid(pw->pw_uid) != 0)
+    {
+        std::stringstream ss;
+        ss << "Не удалось изменить пользователя на " << pw->pw_uid;
+        throw std::runtime_error (ss.str());
+    }
 }
 
 #endif // SERVER_CERTIFICATE_H

@@ -10,18 +10,28 @@
 #include "worker_thread_manager.h"
 using namespace boost::asio::ip;
 
+struct server_params
+{
+    tcp::endpoint endpoint;
+    size_t max_idle_threads;
+
+    std::string certificate;
+    std::string private_key;
+    std::string dh_params;
+};
+
 struct server
 {
     typedef boost::beast::http::response<boost::beast::http::string_body> response_t;
     typedef boost::beast::http::request<boost::beast::http::string_body> request_t;
 
-    server(boost::asio::io_context& ctx, tcp::endpoint endpoint)
-        :acceptor(ctx, endpoint)
+    server(boost::asio::io_context& ctx, server_params const& params)
+        :acceptor(ctx, params.endpoint)
         ,connection_count(0)
         ,ssl_ctx(boost::asio::ssl::context::tlsv12)
-        ,manager(5, [this]{thread_proc(); })
+        ,manager(params.max_idle_threads, [this]{thread_proc(); })
     {
-        load_server_certificate(ssl_ctx);
+        load_server_certificate(ssl_ctx, params);
         manager.start();
     }
 
@@ -31,6 +41,28 @@ struct server
 
     response_t generate_response(request_t const & req);
     response_t generate_bad_request_response(request_t const& req, std::string const& str);
+
+
+    void load_server_certificate(boost::asio::ssl::context& ctx, server_params const& params)
+    {
+        ctx.set_options(
+          boost::asio::ssl::context::default_workarounds |
+          boost::asio::ssl::context::no_sslv2 |
+          boost::asio::ssl::context::single_dh_use);
+
+        std::string const& cert = params.certificate;
+        ctx.use_certificate_chain(
+          boost::asio::buffer(cert.data(), cert.size()));
+
+        std::string const& key = params.private_key;
+        ctx.use_private_key(
+          boost::asio::buffer(key.data(), key.size()),
+          boost::asio::ssl::context::file_format::pem);
+
+        std::string const& dh = params.dh_params;
+        ctx.use_tmp_dh(
+          boost::asio::buffer(dh.data(), dh.size()));
+    }
 
 private:
 
@@ -112,14 +144,63 @@ tcp::socket server::accept(tcp::endpoint& endpoint)
     return acceptor.accept(endpoint);
 }
 
-int main()
+int main(int argc, char* argv[])
 {
     try
     {
+        int port = 1025;
+        int max_idle_threads = 5;
+
+        std::string certificate_file_name = "cert.pem";
+        std::string private_key_file_name = "key.pem";
+        std::string dh_params_file_name   = "dh.pem";
+
+        std::string username;
+
+
+        for(int i = 1;;)
+        {
+            if(i == argc)
+                break;
+            std::string key = argv[i];
+            ++i;
+            if(i == argc)
+                throw std::runtime_error("Ожидалось значение");
+            std::string value = argv[i];
+            ++i;
+            if(key == "--port")
+                port = stoi(value);
+            else if (key == "--max-idle-threads")
+                max_idle_threads = stoi(value);
+            else if(key == "--certificate")
+                certificate_file_name = value;
+            else if(key == "--private-key")
+                private_key_file_name = value;
+            else if(key == "--dh-params")
+                dh_params_file_name = value;
+            else if(key == "--user")
+                username = value;
+            else
+                throw std::runtime_error("Неизвестный параметр");
+
+        }
+
         signal_set set = {SIGINT, SIGTERM, SIGHUP};
         block_signals block(set);
         boost::asio::io_context ctx;
-        server server(ctx, tcp::endpoint (tcp::v4(), 1025));
+        server_params params =
+        {
+            .endpoint         = tcp::endpoint (tcp::v4(), port),
+            .max_idle_threads = static_cast<size_t>(max_idle_threads),
+            .certificate      = read_file(certificate_file_name),
+            .private_key      = read_file(private_key_file_name),
+            .dh_params        = read_file(dh_params_file_name),
+        };
+
+        if(!username.empty())
+            change_user(username);
+
+        server server(ctx, params);
         int sig_num = set.wait();
         std::cerr << "Завершаемся с сигналом " << sig_num << std::endl;
     }
@@ -127,6 +208,4 @@ int main()
     {
         std::cout << e.what() << std::endl;
     }
-
-
 }
