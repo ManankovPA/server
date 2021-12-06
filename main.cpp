@@ -18,6 +18,7 @@ struct server_params
     std::string certificate;
     std::string private_key;
     std::string dh_params;
+    std::string token;
 };
 
 struct server
@@ -154,6 +155,7 @@ int main(int argc, char* argv[])
         std::string certificate_file_name = "cert.pem";
         std::string private_key_file_name = "key.pem";
         std::string dh_params_file_name   = "dh.pem";
+        std::string slack_params_token   = "token.txt";
 
         std::string username;
 
@@ -178,6 +180,8 @@ int main(int argc, char* argv[])
                 private_key_file_name = value;
             else if(key == "--dh-params")
                 dh_params_file_name = value;
+            else if(key == "--token")
+                slack_params_token = value;
             else if(key == "--user")
                 username = value;
             else
@@ -195,6 +199,7 @@ int main(int argc, char* argv[])
             .certificate      = read_file(certificate_file_name),
             .private_key      = read_file(private_key_file_name),
             .dh_params        = read_file(dh_params_file_name),
+            .token            = read_file(slack_params_token)
         };
 
         if(!username.empty())
